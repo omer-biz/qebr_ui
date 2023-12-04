@@ -1,9 +1,8 @@
 module Main exposing (main)
 
 import Browser
-import Html exposing (Html, button, div, img, input, span, text)
-import Html.Attributes exposing (placeholder, src, value, width)
-import Html.Events exposing (onClick, onInput)
+import Element exposing (centerX)
+import Element.Input as Input
 import Http
 import Json.Decode exposing (Decoder, fail, field, float, int, list, nullable, string, succeed)
 import Json.Decode.Pipeline exposing (required)
@@ -23,6 +22,11 @@ qebrUrl =
         Debug.todo "when will you be hosting?"
 
 
+apiVersion : String
+apiVersion =
+    "api_v1/"
+
+
 logoPath : String
 logoPath =
     "static/qebr_logo.png"
@@ -35,8 +39,7 @@ type alias Model =
 
 
 type Page
-    = NotFound
-    | SearchResult (List Deceased)
+    = SearchResult (List Deceased)
     | DetailView Deceased
     | Start
 
@@ -83,51 +86,65 @@ view : Model -> Browser.Document Msg
 view model =
     { title = "Qebr"
     , body =
-        [ div [] <|
-            viewSearchField model.serchQuery
-                :: (case model.page of
-                        Start ->
-                            []
-
-                        SearchResult result ->
-                            List.map viewDeceased result
-
-                        DetailView deceased ->
-                            [ viewDetailDeceased deceased ]
-
-                        NotFound ->
-                            []
-                   )
+        [ Element.layout [{- Background.color <| rgb255 23 23 23 -}] <|
+            Element.column
+                [ centerX
+                ]
+                [ viewSearchField model.serchQuery
+                , viewResults model.page
+                ]
         ]
     }
 
 
-viewSearchField : String -> Html Msg
+viewResults : Page -> Element.Element Msg
+viewResults page =
+    case page of
+        Start ->
+            Element.none
+
+        SearchResult results ->
+            viewListDeceased results
+
+        DetailView deceased ->
+            viewDetailDeceased deceased
+
+
+viewListDeceased : List Deceased -> Element.Element Msg
+viewListDeceased results =
+    Element.row [] <| List.map viewDeceased results
+
+
+viewSearchField : String -> Element.Element Msg
 viewSearchField searchQuery =
-    span []
-        [ img [ src <| qebrUrl ++ logoPath, width 300 ] []
-        , span [] []
-        , input [ onInput SearchField, placeholder "Search", value searchQuery ] []
-        , button [ onClick Search ]
-            [ text "Search" ]
+    Element.column []
+        [ Element.image [ Element.width (Element.px 400) ] { src = qebrUrl ++ logoPath, description = "Qebr" }
+        , Element.row []
+            [ Input.search [ Element.width Element.fill ]
+                { onChange = SearchField
+                , text = searchQuery
+                , placeholder = Nothing
+                , label = Input.labelHidden ""
+                }
+            , Input.button [] { onPress = Just Search, label = Element.text "Search" }
+            ]
         ]
 
 
-viewDeceased : Deceased -> Html Msg
+viewDeceased : Deceased -> Element.Element Msg
 viewDeceased deceased =
-    div []
-        [ text deceased.fullName
-        , text " \n "
-        , text deceased.afocha
-        , button [ onClick (ViewDetailDeceased deceased) ] [ text "More" ]
+    Element.column [ Element.padding 10 ]
+        [ Element.text deceased.fullName
+        , Element.text <| String.fromInt deceased.qebele
+        , Input.button [] { onPress = Just (ViewDetailDeceased deceased), label = Element.text "More" }
         ]
 
 
-viewDetailDeceased : Deceased -> Html Msg
+viewDetailDeceased : Deceased -> Element.Element msg
 viewDetailDeceased deceased =
-    div []
-        [ text deceased.fullName
-        , text deceased.afocha
+    Element.column [ Element.padding 10 ]
+        [ Element.text deceased.fullName
+        , Element.text deceased.afocha
         ]
 
 
@@ -190,7 +207,7 @@ fetchAfocha afochaUrl =
 searchQebr : String -> Cmd Msg
 searchQebr query =
     Http.get
-        { url = qebrUrl ++ "deceased/?search=" ++ query
+        { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
         , expect = Http.expectJson GotQebrResponse qebrDecoder
         }
 
