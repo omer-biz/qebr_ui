@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Browser
-import Element exposing (centerX)
+import Element exposing (alignBottom, alignRight, centerX, fill, padding, spacing)
 import Element.Input as Input
 import Http
 import Json.Decode exposing (Decoder, fail, field, float, int, list, nullable, string, succeed)
@@ -88,13 +88,39 @@ view model =
     , body =
         [ Element.layout [{- Background.color <| rgb255 23 23 23 -}] <|
             Element.column
-                [ centerX
-                ]
-                [ viewSearchField model.serchQuery
-                , viewResults model.page
+                [ Element.width fill, Element.height fill ]
+                [ viewHeader
+                , viewContent model
+                , viewFooter
                 ]
         ]
     }
+
+
+viewHeader : Element.Element msg
+viewHeader =
+    let
+        textAttribute =
+            [ spacing 10, alignRight, padding 10 ]
+    in
+    Element.row textAttribute
+        [ Element.text "About Us"
+        , Element.text "Contact Us"
+        , Element.text "Change Language"
+        ]
+
+
+viewFooter : Element.Element msg
+viewFooter =
+    Element.row [ centerX, alignBottom, padding 20 ] [ Element.text "Copyright" ]
+
+
+viewContent : Model -> Element.Element Msg
+viewContent model =
+    Element.column [ Element.width fill ]
+        [ viewSearchField model.serchQuery
+        , viewResults model.page
+        ]
 
 
 viewResults : Page -> Element.Element Msg
@@ -112,12 +138,12 @@ viewResults page =
 
 viewListDeceased : List Deceased -> Element.Element Msg
 viewListDeceased results =
-    Element.row [] <| List.map viewDeceased results
+    Element.row [ centerX ] <| List.map viewDeceased results
 
 
 viewSearchField : String -> Element.Element Msg
 viewSearchField searchQuery =
-    Element.column []
+    Element.column [ centerX ]
         [ Element.image [ Element.width (Element.px 400) ] { src = qebrUrl ++ logoPath, description = "Qebr" }
         , Element.row []
             [ Input.search [ Element.width Element.fill ]
