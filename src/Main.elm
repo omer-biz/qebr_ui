@@ -9,6 +9,7 @@ import Element.Input as Input
 import Http
 import Json.Decode exposing (Decoder, fail, field, float, int, list, nullable, string, succeed)
 import Json.Decode.Pipeline exposing (required)
+import SearchBox
 
 
 debugMode : Bool
@@ -32,12 +33,25 @@ apiVersion =
 
 logoPath : String
 logoPath =
-    "static/qebr_logo.png"
+    qebrUrl ++ "static/qebr_logo.png"
+
+
+autocompletePath : String
+autocompletePath =
+    qebrUrl ++ apiVersion ++ "autocomplete/"
 
 
 type alias Model =
-    { serchQuery : String
-    , page : Page
+    { page : Page
+    , autocomplete : Autocomplete
+    }
+
+
+type alias Autocomplete =
+    { suggestions : Maybe (List String)
+    , selected : Maybe String
+    , boxState : SearchBox.State
+    , searchQuery : String
     }
 
 
@@ -84,11 +98,12 @@ type alias QebrResponse =
 
 
 type Msg
-    = SearchField String
-    | Search
+    = Search
     | ViewDetailDeceased Deceased
     | GotQebrResponse (Result Http.Error QebrResponse)
     | GotAfochaResponse (Result Http.Error String)
+    | GotAutocomplete (Result Http.Error (List String))
+    | ChangedSearchField (SearchBox.ChangeEvent String)
 
 
 view : Model -> Browser.Document Msg
@@ -150,7 +165,7 @@ viewFooter =
 viewContent : Model -> Element.Element Msg
 viewContent model =
     Element.column [ centerX, spacing 10 ]
-        [ viewSearchField model.serchQuery
+        [ viewSearchField model.autocomplete
         , viewResults model.page
 
         -- , viewDeceased sampleDeceased
@@ -175,22 +190,32 @@ viewListDeceased results =
     Element.row [ centerX, spacing 10 ] <| List.map viewDeceased results
 
 
-viewSearchField : String -> Element.Element Msg
-viewSearchField searchQuery =
+viewSearchField : Autocomplete -> Element.Element Msg
+viewSearchField autocomplete =
     Element.column [ centerX ]
-        [ Element.image [ Element.width (Element.px 400) ] { src = qebrUrl ++ logoPath, description = "Qebr" }
+        [ Element.image [ centerX, Element.width (Element.px 400) ] { src = logoPath, description = "Qebr" }
         , Element.row [ spacing 20 ]
-            [ Input.search [ padding 5, Border.width 2 ]
-                { onChange = SearchField
-                , text = searchQuery
-                , placeholder = Nothing
-                , label = Input.labelHidden "search label"
-                }
+            [ searchInputField autocomplete
             , Input.button
                 simpleButtonStyle
                 { onPress = Just Search, label = Element.text "Search" }
             ]
         ]
+
+
+searchInputField : Autocomplete -> Element.Element Msg
+searchInputField autocomplete =
+    SearchBox.input [ padding 5, Border.width 2, Element.width <| Element.px 400 ]
+        { onChange = ChangedSearchField
+        , text = autocomplete.searchQuery
+        , selected = autocomplete.selected
+        , options = autocomplete.suggestions
+        , label = Input.labelHidden ""
+        , placeholder = Nothing
+        , toLabel = \opt -> opt
+        , filter = \_ _ -> True
+        , state = autocomplete.boxState
+        }
 
 
 simpleButtonStyle : List (Element.Attribute msg)
@@ -226,19 +251,65 @@ viewDetailDeceased deceased =
         ]
 
 
+modSelection : Autocomplete -> String -> Autocomplete
+modSelection ac selected =
+    { ac | selected = Just selected }
+
+
+modQuery : Autocomplete -> String -> Autocomplete
+modQuery ac query =
+    { ac
+        | searchQuery = query
+        , selected = Nothing
+        , boxState = SearchBox.reset ac.boxState
+    }
+
+
+modBoxState : Autocomplete -> SearchBox.Msg -> Autocomplete
+modBoxState ac subMsg =
+    { ac | boxState = SearchBox.update subMsg ac.boxState }
+
+
+modSuggestions : Autocomplete -> List String -> Autocomplete
+modSuggestions ac suggestions =
+    { ac | suggestions = Just suggestions, boxState = SearchBox.reset ac.boxState }
+
+
 init : () -> ( Model, Cmd msg )
 init _ =
-    ( Model "" Start, Cmd.none )
+    ( Model Start <| Autocomplete Nothing Nothing SearchBox.init "", Cmd.none )
+
+
+updateSearchBox : Model -> SearchBox.ChangeEvent String -> ( Model, Cmd Msg )
+updateSearchBox model ev =
+    case ev of
+        SearchBox.SelectionChanged selected ->
+            ( { model | autocomplete = modSelection model.autocomplete selected }, Cmd.none )
+
+        SearchBox.TextChanged text ->
+            ( { model | autocomplete = modQuery model.autocomplete text }, fetchAutocomplete text )
+
+        SearchBox.SearchBoxChanged subMsg ->
+            ( { model | autocomplete = modBoxState model.autocomplete subMsg }, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        SearchField query ->
-            ( { model | serchQuery = query }, Cmd.none )
+        ChangedSearchField ev ->
+            updateSearchBox model ev
 
         Search ->
-            ( model, searchQebr model.serchQuery )
+            let
+                query =
+                    case model.autocomplete.selected of
+                        Nothing ->
+                            model.autocomplete.searchQuery
+
+                        Just text ->
+                            text
+            in
+            ( model, searchQebr query )
 
         ViewDetailDeceased deceased ->
             ( { model | page = DetailView deceased }, fetchAfocha deceased.afocha )
@@ -257,6 +328,16 @@ update msg model =
             ( { model | page = SearchResult response.results }, Cmd.none )
 
         GotQebrResponse (Err err) ->
+            let
+                _ =
+                    Debug.log "err " err
+            in
+            ( model, Cmd.none )
+
+        GotAutocomplete (Ok response) ->
+            ( { model | autocomplete = modSuggestions model.autocomplete response }, Cmd.none )
+
+        GotAutocomplete (Err err) ->
             let
                 _ =
                     Debug.log "err " err
@@ -288,6 +369,18 @@ searchQebr query =
         { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
         , expect = Http.expectJson GotQebrResponse qebrDecoder
         }
+
+
+fetchAutocomplete : String -> Cmd Msg
+fetchAutocomplete query =
+    if String.length query >= 3 then
+        Http.get
+            { url = autocompletePath ++ query
+            , expect = Http.expectJson GotAutocomplete (list string)
+            }
+
+    else
+        Cmd.none
 
 
 afochaDecoder : Decoder String
