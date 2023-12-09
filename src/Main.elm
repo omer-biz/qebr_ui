@@ -358,10 +358,14 @@ update msg model =
 
 searchQebr : String -> Cmd Msg
 searchQebr query =
-    Http.get
-        { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
-        , expect = Http.expectJson GotQebrResponse qebrDecoder
-        }
+    if String.length query >= 3 then
+        Http.get
+            { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
+            , expect = Http.expectJson GotQebrResponse qebrDecoder
+            }
+
+    else
+        Cmd.none
 
 
 fetchAutocomplete : String -> Cmd Msg
