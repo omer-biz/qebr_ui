@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Browser
-import Element exposing (alignRight, centerX, fill, mouseDown, mouseOver, padding, paddingXY, rgb255, spacing, spacingXY)
+import Element exposing (alignLeft, alignRight, centerX, fill, mouseDown, mouseOver, padding, paddingXY, rgb255, spacing, spacingXY)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
@@ -66,7 +66,7 @@ type alias Autocomplete =
 
 
 type Page
-    = SearchResult (List Deceased)
+    = SearchResult QebrResponse
     | Start
     | Error Http.Error
 
@@ -117,6 +117,7 @@ type Msg
     | GotQebrResponse (Result Http.Error QebrResponse)
     | GotAutocomplete (Result Http.Error (List String))
     | ChangedSearchField (SearchBox.ChangeEvent String)
+    | FetchQebr String
 
 
 view : Model -> Browser.Document Msg
@@ -190,9 +191,34 @@ viewResults page =
             Element.el [] <| Element.text "Error: Can't connect to the server"
 
 
-viewListDeceased : List Deceased -> Element.Element Msg
+viewListDeceased : QebrResponse -> Element.Element Msg
 viewListDeceased results =
-    Element.column [ spacing 10 ] <| List.map viewDeceased results
+    Element.column [ spacing 10, Element.width fill ] <|
+        List.map viewDeceased results.results
+            ++ [ Element.row
+                    [ Element.width fill, paddingXY 0 20 ]
+                 <|
+                    resultNav { next = results.next, prev = results.previous }
+               ]
+
+
+resultNav : { next : Maybe String, prev : Maybe String } -> List (Element.Element Msg)
+resultNav { next, prev } =
+    [ navButton next "Next" alignRight
+    , navButton prev "Previous" alignLeft
+    ]
+
+
+navButton : Maybe String -> String -> Element.Attribute Msg -> Element.Element Msg
+navButton link label alignment =
+    case link of
+        Just url ->
+            Input.button
+                (alignment :: simpleButtonStyle)
+                { onPress = Just (FetchQebr url), label = Element.text label }
+
+        Nothing ->
+            Element.none
 
 
 qebrLogo : Element.Element msg
@@ -339,8 +365,11 @@ update msg model =
             in
             ( model, searchQebr query )
 
+        FetchQebr link ->
+            ( model, fetchQebr link )
+
         GotQebrResponse (Ok response) ->
-            ( { model | page = SearchResult response.results }, Cmd.none )
+            ( { model | page = SearchResult response }, Cmd.none )
 
         GotQebrResponse (Err err) ->
             ( { model | page = serverError err }, Cmd.none )
@@ -367,6 +396,14 @@ searchQebr query =
 
     else
         Cmd.none
+
+
+fetchQebr : String -> Cmd Msg
+fetchQebr link =
+    Http.get
+        { url = link
+        , expect = Http.expectJson GotQebrResponse qebrDecoder
+        }
 
 
 fetchAutocomplete : String -> Cmd Msg
