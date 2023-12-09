@@ -1,13 +1,13 @@
 module Main exposing (main)
 
 import Browser
-import Element exposing (alignBottom, alignRight, centerX, fill, mouseDown, mouseOver, padding, rgb255, spacing)
+import Element exposing (alignRight, centerX, fill, mouseDown, mouseOver, padding, paddingXY, rgb255, spacing, spacingXY)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
 import Http
-import Json.Decode exposing (Decoder, fail, field, float, int, list, nullable, string, succeed)
+import Json.Decode exposing (Decoder, fail, field, float, int, list, maybe, nullable, string, succeed)
 import Json.Decode.Pipeline exposing (required)
 import SearchBox
 
@@ -31,14 +31,24 @@ apiVersion =
     "api_v1/"
 
 
-logoPath : String
-logoPath =
-    qebrUrl ++ "static/qebr_logo.png"
-
-
 autocompletePath : String
 autocompletePath =
     qebrUrl ++ apiVersion ++ "autocomplete/"
+
+
+maleAvatar : String
+maleAvatar =
+    qebrUrl ++ "static/male_avatar.png"
+
+
+femaleAvatar : String
+femaleAvatar =
+    qebrUrl ++ "static/female_avatar.png"
+
+
+googleMap : Location -> String
+googleMap location =
+    "https://www.google.com/maps/search/?api=1&query=" ++ String.fromFloat location.lat ++ "," ++ String.fromFloat location.lat
 
 
 type alias Model =
@@ -57,7 +67,6 @@ type alias Autocomplete =
 
 type Page
     = SearchResult (List Deceased)
-    | DetailView Deceased
     | Start
 
 
@@ -72,14 +81,19 @@ type alias Location =
     }
 
 
+type alias Afocha =
+    { name : String }
+
+
 type alias Deceased =
     { fullName : String
     , roleNumber : Int
     , gender : Gender
     , graveNumber : Int
-    , afocha : String
+    , afocha : Afocha
     , qebele : Int
     , location : Location
+    , portraitPhoto : Maybe String
     }
 
 
@@ -94,14 +108,12 @@ type alias QebrResponse =
 
 -- sampleDeceased : Deceased
 -- sampleDeceased =
---     Deceased "Ali Ahmed Abdi" 134 Male 23453 "Haji Ali" 2 <| Location 12.1 221
+--     Deceased "Ali Ahmed Abdi" 134 Male 23453 (Afocha "Haji Ali") 2 (Location 12.1 221) (Just maleAvatar)
 
 
 type Msg
     = Search
-    | ViewDetailDeceased Deceased
     | GotQebrResponse (Result Http.Error QebrResponse)
-    | GotAfochaResponse (Result Http.Error String)
     | GotAutocomplete (Result Http.Error (List String))
     | ChangedSearchField (SearchBox.ChangeEvent String)
 
@@ -110,12 +122,11 @@ view : Model -> Browser.Document Msg
 view model =
     { title = "Qebr"
     , body =
-        [ Element.layout [{- Background.color <| rgb255 23 23 23 -}] <|
+        [ Element.layout [] <|
             Element.column
                 [ Element.width fill, Element.height fill ]
                 [ viewHeader
                 , viewContent model
-                , viewFooter
                 ]
         ]
     }
@@ -157,18 +168,11 @@ headerLink content =
     Element.link headerStyle { url = "https://www.google.com", label = Element.text content }
 
 
-viewFooter : Element.Element msg
-viewFooter =
-    Element.row [ centerX, alignBottom, padding 20 ] [ Element.text "Copyright" ]
-
-
 viewContent : Model -> Element.Element Msg
 viewContent model =
     Element.column [ centerX, spacing 10 ]
         [ viewSearchField model.autocomplete
         , viewResults model.page
-
-        -- , viewDeceased sampleDeceased
         ]
 
 
@@ -181,19 +185,21 @@ viewResults page =
         SearchResult results ->
             viewListDeceased results
 
-        DetailView deceased ->
-            viewDetailDeceased deceased
-
 
 viewListDeceased : List Deceased -> Element.Element Msg
 viewListDeceased results =
-    Element.row [ centerX, spacing 10 ] <| List.map viewDeceased results
+    Element.column [ spacing 10 ] <| List.map viewDeceased results
+
+
+qebrLogo : Element.Element msg
+qebrLogo =
+    Element.el [ centerX, Font.underline, Font.size 150, padding 20 ] <| Element.text "Qebr"
 
 
 viewSearchField : Autocomplete -> Element.Element Msg
 viewSearchField autocomplete =
-    Element.column [ centerX ]
-        [ Element.image [ centerX, Element.width (Element.px 400) ] { src = logoPath, description = "Qebr" }
+    Element.column [ centerX, spacingXY 0 10 ]
+        [ qebrLogo
         , Element.row [ spacing 20 ]
             [ searchInputField autocomplete
             , Input.button
@@ -230,25 +236,43 @@ simpleButtonStyle =
 
 viewDeceased : Deceased -> Element.Element Msg
 viewDeceased deceased =
-    Element.column
-        [ Element.padding 10
-        , Border.color <| rgb255 0xFF 0x00 0x00
-        , Border.width 1
-        , spacing 5
-        , Border.rounded 2
-        ]
-        [ Element.text deceased.fullName
-        , Element.text <| String.fromInt deceased.qebele
-        , Input.button simpleButtonStyle { onPress = Just (ViewDetailDeceased deceased), label = Element.text "More" }
+    Element.row [ Element.width fill, paddingXY 0 10 ]
+        [ Element.column
+            [ Element.padding 10
+            , spacing 5
+            , Border.rounded 2
+            , spacing 10
+            ]
+            [ Element.text <| "Full Name: " ++ deceased.fullName
+            , Element.text <| "Kebele:  " ++ String.fromInt deceased.qebele
+            , Element.text <| "Afocha: " ++ deceased.afocha.name
+            , Element.link simpleButtonStyle
+                { url = googleMap deceased.location
+                , label = Element.text "Location on map"
+                }
+            ]
+        , Element.image [ Element.width <| Element.px 100, alignRight ] { src = portraitFrom deceased.gender deceased.portraitPhoto, description = "" }
         ]
 
 
-viewDetailDeceased : Deceased -> Element.Element msg
-viewDetailDeceased deceased =
-    Element.column [ Element.padding 10 ]
-        [ Element.text deceased.fullName
-        , Element.text deceased.afocha
-        ]
+portraitFrom : Gender -> Maybe String -> String
+portraitFrom gender portrait =
+    case portrait of
+        Just path ->
+            path
+
+        Nothing ->
+            genderToAvatar gender
+
+
+genderToAvatar : Gender -> String
+genderToAvatar gender =
+    case gender of
+        Male ->
+            maleAvatar
+
+        Female ->
+            femaleAvatar
 
 
 modSelection : Autocomplete -> String -> Autocomplete
@@ -311,19 +335,6 @@ update msg model =
             in
             ( model, searchQebr query )
 
-        ViewDetailDeceased deceased ->
-            ( { model | page = DetailView deceased }, fetchAfocha deceased.afocha )
-
-        GotAfochaResponse (Ok response) ->
-            ( updateAfochPage model response, Cmd.none )
-
-        GotAfochaResponse (Err err) ->
-            let
-                _ =
-                    Debug.log "err " err
-            in
-            ( model, Cmd.none )
-
         GotQebrResponse (Ok response) ->
             ( { model | page = SearchResult response.results }, Cmd.none )
 
@@ -343,24 +354,6 @@ update msg model =
                     Debug.log "err " err
             in
             ( model, Cmd.none )
-
-
-updateAfochPage : Model -> String -> Model
-updateAfochPage model afocha =
-    case model.page of
-        DetailView deceased ->
-            { model | page = DetailView { deceased | afocha = afocha } }
-
-        _ ->
-            model
-
-
-fetchAfocha : String -> Cmd Msg
-fetchAfocha afochaUrl =
-    Http.get
-        { url = afochaUrl
-        , expect = Http.expectJson GotAfochaResponse afochaDecoder
-        }
 
 
 searchQebr : String -> Cmd Msg
@@ -383,9 +376,10 @@ fetchAutocomplete query =
         Cmd.none
 
 
-afochaDecoder : Decoder String
+afochaDecoder : Decoder Afocha
 afochaDecoder =
-    field "name" string
+    succeed Afocha
+        |> required "name" string
 
 
 qebrDecoder : Json.Decode.Decoder QebrResponse
@@ -404,9 +398,10 @@ deceasedDecoder =
         |> required "role_num" int
         |> required "gender" decodeGender
         |> required "grave_number" int
-        |> required "afocha_name" string
+        |> required "afocha_name" afochaDecoder
         |> required "kebele" int
         |> required "location" locationDecoder
+        |> required "portrait_photo" (maybe string)
 
 
 locationDecoder : Decoder Location
