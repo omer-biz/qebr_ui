@@ -68,6 +68,7 @@ type alias Autocomplete =
 type Page
     = SearchResult (List Deceased)
     | Start
+    | Error Http.Error
 
 
 type Gender
@@ -184,6 +185,9 @@ viewResults page =
 
         SearchResult results ->
             viewListDeceased results
+
+        Error _ ->
+            Element.el [] <| Element.text "Error: Can't connect to the server"
 
 
 viewListDeceased : List Deceased -> Element.Element Msg
@@ -339,21 +343,18 @@ update msg model =
             ( { model | page = SearchResult response.results }, Cmd.none )
 
         GotQebrResponse (Err err) ->
-            let
-                _ =
-                    Debug.log "err " err
-            in
-            ( model, Cmd.none )
+            ( { model | page = serverError err }, Cmd.none )
 
         GotAutocomplete (Ok response) ->
             ( { model | autocomplete = modSuggestions model.autocomplete response }, Cmd.none )
 
         GotAutocomplete (Err err) ->
-            let
-                _ =
-                    Debug.log "err " err
-            in
-            ( model, Cmd.none )
+            ( { model | page = serverError err }, Cmd.none )
+
+
+serverError : Http.Error -> Page
+serverError err =
+    Error <| Debug.log "Error: " err
 
 
 searchQebr : String -> Cmd Msg
