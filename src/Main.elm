@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Browser
+import Date exposing (Date)
+import DatePicker exposing (ChangeEvent(..))
 import Element exposing (alignLeft, alignRight, centerX, fill, mouseDown, mouseOver, padding, paddingXY, rgb255, spacing, spacingXY)
 import Element.Background as Background
 import Element.Border as Border
@@ -9,7 +11,9 @@ import Element.Input as Input
 import Http
 import Json.Decode exposing (Decoder, fail, field, float, int, list, maybe, nullable, string, succeed)
 import Json.Decode.Pipeline exposing (required)
+import Maybe.Extra
 import SearchBox
+import Task
 
 
 debugMode : Bool
@@ -53,7 +57,7 @@ googleMap location =
 
 type alias Model =
     { page : Page
-    , autocomplete : Autocomplete
+    , searchField : SearchField
     }
 
 
@@ -65,6 +69,38 @@ type alias Autocomplete =
     }
 
 
+type SearchField
+    = Simple Autocomplete
+    | Advanced FilterFields
+
+
+type alias DeathDate =
+    { date : Maybe Date
+    , dateText : String
+    , pickerModel : DatePicker.Model
+    }
+
+
+type alias FilterFields =
+    { fullName : String
+    , qebele : String
+    , dod : DeathDate
+    , graveNumber : String
+    , gender : Gender
+    , afochaName : String
+    }
+
+
+type AdvancedMsg
+    = FullName String
+    | Qebele String
+    | Dod ChangeEvent
+    | GraveNumber String
+    | Gender Gender
+    | AfochaName String
+    | SetToday Date
+
+
 type Page
     = SearchResult QebrResponse
     | Start
@@ -74,6 +110,7 @@ type Page
 type Gender
     = Male
     | Female
+    | Unknown
 
 
 type alias Location =
@@ -118,6 +155,9 @@ type Msg
     | GotAutocomplete (Result Http.Error (List String))
     | ChangedSearchField (SearchBox.ChangeEvent String)
     | FetchQebr String
+    | ChangeToAdvanced
+    | ChangeToSimple
+    | ChangeFilterFields AdvancedMsg
 
 
 view : Model -> Browser.Document Msg
@@ -172,9 +212,67 @@ headerLink content =
 
 viewContent : Model -> Element.Element Msg
 viewContent model =
+    let
+        field =
+            case model.searchField of
+                Simple autocomplete ->
+                    viewSearchField autocomplete
+
+                Advanced fields ->
+                    viewAdvancedSearchFields fields
+    in
     Element.column [ centerX, spacing 10 ]
-        [ viewSearchField model.autocomplete
+        [ qebrLogo
+        , field
         , viewResults model.page
+        ]
+
+
+viewAdvancedSearchFields : FilterFields -> Element.Element Msg
+viewAdvancedSearchFields fields =
+    let
+        simpleInput text toFilterMsg label =
+            Input.text [ padding 5, Border.width 2, Element.width <| Element.px 300 ]
+                { onChange = ChangeFilterFields << toFilterMsg
+                , placeholder = Nothing
+                , label = Input.labelLeft [ Element.width fill, paddingXY 5 0 ] <| Element.text label
+                , text = text
+                }
+
+        datePicker =
+            DatePicker.input [ padding 5, Element.width <| Element.px 300 ]
+                { onChange = ChangeFilterFields << Dod
+                , selected = fields.dod.date
+                , text = fields.dod.dateText
+                , label = Input.labelLeft [ Element.width fill ] <| Element.text "Death Date"
+                , placeholder = Just <| Input.placeholder [] <| Element.text "YYYY-MM-DD"
+                , settings = DatePicker.defaultSettings
+                , model = fields.dod.pickerModel
+                }
+    in
+    Element.column [ spacing 10 ]
+        [ simpleInput fields.fullName FullName "Full Name"
+        , simpleInput fields.qebele Qebele "Qebele"
+        , simpleInput fields.graveNumber GraveNumber "Grave Number"
+        , simpleInput fields.afochaName AfochaName "Afocha"
+        , Input.radio [ Element.width fill ]
+            { label = Input.labelLeft [ Element.width fill ] <| Element.text "Gender"
+            , onChange = ChangeFilterFields << Gender
+            , options =
+                [ Input.option Male (Element.text "Male")
+                , Input.option Female (Element.text "Female")
+                ]
+            , selected = Just fields.gender
+            }
+        , datePicker
+        , Element.row [ spacingXY 15 0, paddingXY 0 10 ]
+            [ Input.button
+                simpleButtonStyle
+                { onPress = Just ChangeToSimple, label = Element.text "Simple Search" }
+            , Input.button
+                simpleButtonStyle
+                { onPress = Just Search, label = Element.text "Search" }
+            ]
         ]
 
 
@@ -229,12 +327,14 @@ qebrLogo =
 viewSearchField : Autocomplete -> Element.Element Msg
 viewSearchField autocomplete =
     Element.column [ centerX, spacingXY 0 10 ]
-        [ qebrLogo
-        , Element.row [ spacing 20 ]
+        [ Element.row [ spacing 20 ]
             [ searchInputField autocomplete
             , Input.button
                 simpleButtonStyle
                 { onPress = Just Search, label = Element.text "Search" }
+            , Input.button
+                simpleButtonStyle
+                { onPress = Just ChangeToAdvanced, label = Element.text "Advanced" }
             ]
         ]
 
@@ -281,7 +381,8 @@ viewDeceased deceased =
                 , label = Element.text "Location on map"
                 }
             ]
-        , Element.image [ Element.width <| Element.px 100, alignRight ] { src = portraitFrom deceased.gender deceased.portraitPhoto, description = "" }
+        , Element.image [ Element.width <| Element.px 100, alignRight ]
+            { src = portraitFrom deceased.gender deceased.portraitPhoto, description = "" }
         ]
 
 
@@ -303,6 +404,9 @@ genderToAvatar gender =
 
         Female ->
             femaleAvatar
+
+        _ ->
+            maleAvatar
 
 
 modSelection : Autocomplete -> String -> Autocomplete
@@ -329,39 +433,63 @@ modSuggestions ac suggestions =
     { ac | suggestions = Just suggestions, boxState = SearchBox.reset ac.boxState }
 
 
+initDeathDate : DeathDate
+initDeathDate =
+    DeathDate Nothing "" (DatePicker.init |> DatePicker.close)
+
+
 init : () -> ( Model, Cmd msg )
 init _ =
-    ( Model Start <| Autocomplete Nothing Nothing SearchBox.init "", Cmd.none )
+    -- ( Model Start <| Simple (Autocomplete Nothing Nothing SearchBox.init ""), Cmd.none )
+    ( Model Start <| Advanced (FilterFields "" "" initDeathDate "" Unknown ""), Cmd.none )
 
 
-updateSearchBox : Model -> SearchBox.ChangeEvent String -> ( Model, Cmd Msg )
-updateSearchBox model ev =
+updateSearchBox : Model -> SearchBox.ChangeEvent String -> Autocomplete -> ( Model, Cmd Msg )
+updateSearchBox model ev ac =
     case ev of
         SearchBox.SelectionChanged selected ->
-            ( { model | autocomplete = modSelection model.autocomplete selected }, Cmd.none )
+            ( { model | searchField = Simple (modSelection ac selected) }, Cmd.none )
 
         SearchBox.TextChanged text ->
-            ( { model | autocomplete = modQuery model.autocomplete text }, fetchAutocomplete text )
+            ( { model | searchField = Simple (modQuery ac text) }, fetchAutocomplete text )
 
         SearchBox.SearchBoxChanged subMsg ->
-            ( { model | autocomplete = modBoxState model.autocomplete subMsg }, Cmd.none )
+            ( { model | searchField = Simple (modBoxState ac subMsg) }, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        ChangeToAdvanced ->
+            ( { model | searchField = Advanced (FilterFields "" "" initDeathDate "" Unknown "") }
+            , Task.perform (ChangeFilterFields << SetToday) Date.today
+            )
+
+        ChangeToSimple ->
+            ( { model | searchField = Simple (Autocomplete Nothing Nothing SearchBox.init "") }, Cmd.none )
+
         ChangedSearchField ev ->
-            updateSearchBox model ev
+            case model.searchField of
+                Simple ac ->
+                    updateSearchBox model ev ac
+
+                _ ->
+                    ( model, Cmd.none )
 
         Search ->
             let
                 query =
-                    case model.autocomplete.selected of
-                        Nothing ->
-                            model.autocomplete.searchQuery
+                    case model.searchField of
+                        Simple ac ->
+                            case ac.selected of
+                                Nothing ->
+                                    ac.searchQuery
 
-                        Just text ->
-                            text
+                                Just text ->
+                                    text
+
+                        _ ->
+                            ""
             in
             ( model, searchQebr query )
 
@@ -375,10 +503,86 @@ update msg model =
             ( { model | page = serverError err }, Cmd.none )
 
         GotAutocomplete (Ok response) ->
-            ( { model | autocomplete = modSuggestions model.autocomplete response }, Cmd.none )
+            let
+                m =
+                    case model.searchField of
+                        Simple ac ->
+                            { model | searchField = Simple (modSuggestions ac response) }
+
+                        _ ->
+                            model
+            in
+            ( m, Cmd.none )
 
         GotAutocomplete (Err err) ->
             ( { model | page = serverError err }, Cmd.none )
+
+        ChangeFilterFields advMsg ->
+            case model.searchField of
+                Advanced fields ->
+                    ( { model | searchField = Advanced (updateAdvancedMsg advMsg fields) }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+
+updateAdvancedMsg : AdvancedMsg -> FilterFields -> FilterFields
+updateAdvancedMsg advMsg fields =
+    case advMsg of
+        FullName name ->
+            { fields | fullName = name }
+
+        Qebele qebele ->
+            { fields | qebele = qebele }
+
+        Gender gender ->
+            { fields | gender = gender }
+
+        AfochaName name ->
+            { fields | afochaName = name }
+
+        Dod dodEvent ->
+            { fields | dod = updateDeathDate dodEvent fields.dod }
+
+        GraveNumber gn ->
+            { fields | graveNumber = gn }
+
+        SetToday date ->
+            { fields | dod = updateDDToday date fields.dod }
+
+
+updateDDToday : Date -> DeathDate -> DeathDate
+updateDDToday date deathDate =
+    { deathDate | pickerModel = deathDate.pickerModel |> DatePicker.setToday date }
+
+
+updateDeathDate : ChangeEvent -> DeathDate -> DeathDate
+updateDeathDate event deathDate =
+    case event of
+        DateChanged date ->
+            { deathDate
+                | date = Just date
+                , dateText = Date.toIsoString date
+                , pickerModel = deathDate.pickerModel |> DatePicker.close
+            }
+
+        TextChanged text ->
+            { deathDate
+                | date =
+                    Debug.log "date"
+                        (Date.fromIsoString text
+                            |> Result.toMaybe
+                            |> Maybe.Extra.orElse deathDate.date
+                        )
+                , dateText = text
+            }
+
+        PickerChanged subMsg ->
+            { deathDate
+                | pickerModel =
+                    deathDate.pickerModel
+                        |> DatePicker.update subMsg
+            }
 
 
 serverError : Http.Error -> Page
