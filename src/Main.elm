@@ -6,14 +6,17 @@ import DatePicker exposing (ChangeEvent(..))
 import Element exposing (alignLeft, alignRight, centerX, fill, mouseDown, mouseOver, padding, paddingXY, rgb255, spacing, spacingXY)
 import Element.Background as Background
 import Element.Border as Border
+import Element.Events
 import Element.Font as Font
 import Element.Input as Input
+import Html.Attributes
 import Http
 import Json.Decode exposing (Decoder, fail, field, float, int, list, maybe, nullable, string, succeed)
 import Json.Decode.Pipeline exposing (required)
 import Maybe.Extra
 import SearchBox
 import Task
+import Time
 
 
 debugMode : Bool
@@ -52,13 +55,21 @@ femaleAvatar =
 
 googleMap : Location -> String
 googleMap location =
-    "https://www.google.com/maps/search/?api=1&query=" ++ String.fromFloat location.lat ++ "," ++ String.fromFloat location.lat
+    "https://www.google.com/maps/search/?api=1&query="
+        ++ String.fromFloat location.lat
+        ++ ","
+        ++ String.fromFloat location.lat
 
 
 type alias Model =
-    { page : Page
+    { status : List Status
+    , page : Page
     , searchField : SearchField
     }
+
+
+type alias Status =
+    { timer : Int, msg : String }
 
 
 type alias Autocomplete =
@@ -158,6 +169,8 @@ type Msg
     | ChangeToAdvanced
     | ChangeToSimple
     | ChangeFilterFields AdvancedMsg
+    | Tick Time.Posix
+    | RemoveStatus Int
 
 
 view : Model -> Browser.Document Msg
@@ -169,9 +182,52 @@ view model =
                 [ Element.width fill, Element.height fill ]
                 [ viewHeader
                 , viewContent model
+                , viewNotifications model.status
                 ]
         ]
     }
+
+
+viewNotifications : List Status -> Element.Element Msg
+viewNotifications statuses =
+    case statuses of
+        [] ->
+            Element.text ""
+
+        rest ->
+            rest
+                |> List.indexedMap viewNotification
+                |> Element.column
+                    [ customCss "position" "fixed"
+                    , customCss "top" "5%"
+                    , customCss "right" "5%"
+                    , spacingXY 0 10
+                    ]
+
+
+customCss : String -> String -> Element.Attribute msg
+customCss key value =
+    Element.htmlAttribute (Html.Attributes.style key value)
+
+
+viewNotification : Int -> Status -> Element.Element Msg
+viewNotification index notification =
+    Element.column
+        [ Background.color <| rgb255 0xFF 0 0
+        , Border.rounded 10
+        , Element.width <| Element.px 200
+        , Element.height <| Element.px 70
+        , padding 10
+        , Font.color <| rgb255 0xFF 0xFF 0xFF
+        , Element.Events.onClick <| RemoveStatus index
+        ]
+        [ Element.el [ Font.bold, Font.underline, Font.size 13 ] <|
+            Element.text "Error"
+        , Element.paragraph [ Font.size 12, paddingXY 0 5, spacingXY 0 0 ]
+            [ Element.text notification.msg
+            ]
+        , Element.el [ Font.size 9, alignRight ] (Element.text <| String.fromInt notification.timer)
+        ]
 
 
 viewHeader : Element.Element msg
@@ -440,8 +496,8 @@ initDeathDate =
 
 init : () -> ( Model, Cmd msg )
 init _ =
-    -- ( Model Start <| Simple (Autocomplete Nothing Nothing SearchBox.init ""), Cmd.none )
-    ( Model Start <| Advanced (FilterFields "" "" initDeathDate "" Unknown ""), Cmd.none )
+    -- ( Model Start <| Advanced (FilterFields "" "" initDeathDate "" Unknown ""), Cmd.none )
+    ( Model [] Start <| Simple (Autocomplete Nothing Nothing SearchBox.init ""), Cmd.none )
 
 
 updateSearchBox : Model -> SearchBox.ChangeEvent String -> Autocomplete -> ( Model, Cmd Msg )
@@ -490,8 +546,15 @@ update msg model =
 
                         _ ->
                             ""
+
+                queryServer =
+                    if String.length query >= 3 then
+                        ( model, searchQebr query )
+
+                    else
+                        ( { model | status = statusWithTimer "Search length must be greater than 2" :: model.status }, Cmd.none )
             in
-            ( model, searchQebr query )
+            queryServer
 
         FetchQebr link ->
             ( model, fetchQebr link )
@@ -500,7 +563,7 @@ update msg model =
             ( { model | page = SearchResult response }, Cmd.none )
 
         GotQebrResponse (Err err) ->
-            ( { model | page = serverError err }, Cmd.none )
+            ( { model | status = showError err :: model.status }, Cmd.none )
 
         GotAutocomplete (Ok response) ->
             let
@@ -524,6 +587,38 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        RemoveStatus index ->
+            ( { model | status = deleteIndexStatus index model.status }, Cmd.none )
+
+        Tick _ ->
+            ( { model | status = decrementTimer model.status }, Cmd.none )
+
+
+showError : Http.Error -> Status
+showError err =
+    statusWithTimer <| Debug.toString err
+
+
+statusWithTimer : String -> Status
+statusWithTimer =
+    Status 10
+
+
+decrementTimer : List Status -> List Status
+decrementTimer statuses =
+    let
+        minusOne status =
+            { status | timer = status.timer - 1 }
+    in
+    statuses
+        |> List.map minusOne
+        |> List.filter (\stat -> stat.timer > 0)
+
+
+deleteIndexStatus : Int -> List Status -> List Status
+deleteIndexStatus index status =
+    List.take index status ++ List.drop (index + 1) status
 
 
 updateAdvancedMsg : AdvancedMsg -> FilterFields -> FilterFields
@@ -592,14 +687,10 @@ serverError err =
 
 searchQebr : String -> Cmd Msg
 searchQebr query =
-    if String.length query >= 3 then
-        Http.get
-            { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
-            , expect = Http.expectJson GotQebrResponse qebrDecoder
-            }
-
-    else
-        Cmd.none
+    Http.get
+        { url = qebrUrl ++ apiVersion ++ "deceased/?search=" ++ query
+        , expect = Http.expectJson GotQebrResponse qebrDecoder
+        }
 
 
 fetchQebr : String -> Cmd Msg
@@ -675,8 +766,12 @@ decodeGender =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
+subscriptions model =
+    if List.length model.status > 0 then
+        Time.every 1000 Tick
+
+    else
+        Sub.none
 
 
 main : Program () Model Msg
