@@ -160,15 +160,19 @@ type alias QebrResponse =
 --     Deceased "Ali Ahmed Abdi" 134 Male 23453 (Afocha "Haji Ali") 2 (Location 12.1 221) (Just maleAvatar)
 
 
+type SearchFieldMsg
+    = AdvancedField AdvancedMsg
+    | SimpleField (SearchBox.ChangeEvent String)
+
+
 type Msg
     = Search
     | GotQebrResponse (Result Http.Error QebrResponse)
     | GotAutocomplete (Result Http.Error (List String))
-    | ChangedSearchField (SearchBox.ChangeEvent String)
+    | ChangedSearchField SearchFieldMsg
     | FetchQebr String
-    | ChangeToAdvanced
-    | ChangeToSimple
-    | ChangeFilterFields AdvancedMsg
+    | SwitchToAdvanced
+    | SwitchToSimple
     | Tick Time.Posix
     | RemoveStatus Int
 
@@ -180,8 +184,7 @@ view model =
         [ Element.layout [] <|
             Element.column
                 [ Element.width fill, Element.height fill ]
-                [ viewHeader
-                , viewContent model
+                [ {- viewHeader, -} viewContent model
                 , viewNotifications model.status
                 ]
         ]
@@ -230,42 +233,6 @@ viewNotification index notification =
         ]
 
 
-viewHeader : Element.Element msg
-viewHeader =
-    let
-        boxShadow =
-            Border.shadow
-                { blur = 5
-                , color = rgb255 0x00 0x00 0x00
-                , offset = ( 1, 1 )
-                , size = 0.5
-                }
-    in
-    Element.el
-        [ Element.width fill
-        , boxShadow
-        ]
-    <|
-        Element.row
-            [ spacing 10
-            , padding 10
-            , alignRight
-            ]
-            [ headerLink "About Us"
-            , headerLink "Contact Us"
-            ]
-
-
-headerLink : String -> Element.Element msg
-headerLink content =
-    let
-        headerStyle =
-            [ Font.color <| rgb255 0x00 0x00 0x1F
-            ]
-    in
-    Element.link headerStyle { url = "https://www.google.com", label = Element.text content }
-
-
 viewContent : Model -> Element.Element Msg
 viewContent model =
     let
@@ -289,7 +256,7 @@ viewAdvancedSearchFields fields =
     let
         simpleInput text toFilterMsg label =
             Input.text [ padding 5, Border.width 2, Element.width <| Element.px 300 ]
-                { onChange = ChangeFilterFields << toFilterMsg
+                { onChange = ChangedSearchField << AdvancedField << toFilterMsg
                 , placeholder = Nothing
                 , label = Input.labelLeft [ Element.width fill, paddingXY 5 0 ] <| Element.text label
                 , text = text
@@ -297,7 +264,7 @@ viewAdvancedSearchFields fields =
 
         datePicker =
             DatePicker.input [ padding 5, Element.width <| Element.px 300 ]
-                { onChange = ChangeFilterFields << Dod
+                { onChange = ChangedSearchField << AdvancedField << Dod
                 , selected = fields.dod.date
                 , text = fields.dod.dateText
                 , label = Input.labelLeft [ Element.width fill ] <| Element.text "Death Date"
@@ -313,10 +280,11 @@ viewAdvancedSearchFields fields =
         , simpleInput fields.afochaName AfochaName "Afocha"
         , Input.radio [ Element.width fill ]
             { label = Input.labelLeft [ Element.width fill ] <| Element.text "Gender"
-            , onChange = ChangeFilterFields << Gender
+            , onChange = ChangedSearchField << AdvancedField << Gender
             , options =
                 [ Input.option Male (Element.text "Male")
                 , Input.option Female (Element.text "Female")
+                , Input.option Unknown (Element.text "Unknown")
                 ]
             , selected = Just fields.gender
             }
@@ -324,7 +292,7 @@ viewAdvancedSearchFields fields =
         , Element.row [ spacingXY 15 0, paddingXY 0 10 ]
             [ Input.button
                 simpleButtonStyle
-                { onPress = Just ChangeToSimple, label = Element.text "Simple Search" }
+                { onPress = Just SwitchToSimple, label = Element.text "Simple Search" }
             , Input.button
                 simpleButtonStyle
                 { onPress = Just Search, label = Element.text "Search" }
@@ -390,7 +358,7 @@ viewSearchField autocomplete =
                 { onPress = Just Search, label = Element.text "Search" }
             , Input.button
                 simpleButtonStyle
-                { onPress = Just ChangeToAdvanced, label = Element.text "Advanced" }
+                { onPress = Just SwitchToAdvanced, label = Element.text "Advanced" }
             ]
         ]
 
@@ -398,7 +366,7 @@ viewSearchField autocomplete =
 searchInputField : Autocomplete -> Element.Element Msg
 searchInputField autocomplete =
     SearchBox.input [ padding 5, Border.width 2, Element.width <| Element.px 400 ]
-        { onChange = ChangedSearchField
+        { onChange = ChangedSearchField << SimpleField
         , text = autocomplete.searchQuery
         , selected = autocomplete.selected
         , options = autocomplete.suggestions
@@ -516,18 +484,21 @@ updateSearchBox model ev ac =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        ChangeToAdvanced ->
+        SwitchToAdvanced ->
             ( { model | searchField = Advanced (FilterFields "" "" initDeathDate "" Unknown "") }
-            , Task.perform (ChangeFilterFields << SetToday) Date.today
+            , Task.perform (ChangedSearchField << AdvancedField << SetToday) Date.today
             )
 
-        ChangeToSimple ->
+        SwitchToSimple ->
             ( { model | searchField = Simple (Autocomplete Nothing Nothing SearchBox.init "") }, Cmd.none )
 
         ChangedSearchField ev ->
-            case model.searchField of
-                Simple ac ->
-                    updateSearchBox model ev ac
+            case ( model.searchField, ev ) of
+                ( Simple ac, SimpleField smAdv ) ->
+                    updateSearchBox model smAdv ac
+
+                ( Advanced fields, AdvancedField advEv ) ->
+                    ( { model | searchField = Advanced (updateAdvancedMsg advEv fields) }, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -544,8 +515,19 @@ update msg model =
                                 Just text ->
                                     text
 
-                        _ ->
-                            ""
+                        Advanced filters ->
+                            -- ['full_name', 'kebele', 'dod', 'grave_number', 'gender', 'afocha_name__name']
+                            filters.fullName
+                                ++ ","
+                                ++ filters.qebele
+                                ++ ","
+                                ++ filters.dod.dateText
+                                ++ ","
+                                ++ filters.graveNumber
+                                ++ ","
+                                ++ genderToString filters.gender
+                                ++ ","
+                                ++ filters.afochaName
 
                 queryServer =
                     if String.length query >= 3 then
@@ -580,19 +562,24 @@ update msg model =
         GotAutocomplete (Err err) ->
             ( { model | page = serverError err }, Cmd.none )
 
-        ChangeFilterFields advMsg ->
-            case model.searchField of
-                Advanced fields ->
-                    ( { model | searchField = Advanced (updateAdvancedMsg advMsg fields) }, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
-
         RemoveStatus index ->
             ( { model | status = deleteIndexStatus index model.status }, Cmd.none )
 
         Tick _ ->
             ( { model | status = decrementTimer model.status }, Cmd.none )
+
+
+genderToString : Gender -> String
+genderToString gender =
+    case gender of
+        Male ->
+            "male"
+
+        Female ->
+            "female"
+
+        Unknown ->
+            ""
 
 
 showError : Http.Error -> Status
