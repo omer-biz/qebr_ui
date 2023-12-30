@@ -53,6 +53,11 @@ femaleAvatar =
     qebrUrl ++ "static/female_avatar.png"
 
 
+neutralAvatar : String
+neutralAvatar =
+    qebrUrl ++ "static/neutral_avatar.png"
+
+
 googleMap : Location -> String
 googleMap location =
     "https://www.google.com/maps/search/?api=1&query="
@@ -65,6 +70,8 @@ type alias Model =
     { status : List Status
     , page : Page
     , searchField : SearchField
+    , simpleField : Autocomplete
+    , advancedField : FilterFields
     }
 
 
@@ -81,8 +88,8 @@ type alias Autocomplete =
 
 
 type SearchField
-    = Simple Autocomplete
-    | Advanced FilterFields
+    = Simple
+    | Advanced
 
 
 type alias DeathDate =
@@ -115,6 +122,7 @@ type AdvancedMsg
 type Page
     = SearchResult QebrResponse
     | Start
+    | Loading
     | Error Http.Error
 
 
@@ -160,21 +168,17 @@ type alias QebrResponse =
 --     Deceased "Ali Ahmed Abdi" 134 Male 23453 (Afocha "Haji Ali") 2 (Location 12.1 221) (Just maleAvatar)
 
 
-type SearchFieldMsg
-    = AdvancedField AdvancedMsg
-    | SimpleField (SearchBox.ChangeEvent String)
-
-
 type Msg
     = Search
     | GotQebrResponse (Result Http.Error QebrResponse)
     | GotAutocomplete (Result Http.Error (List String))
-    | ChangedSearchField SearchFieldMsg
     | FetchQebr String
     | SwitchToAdvanced
     | SwitchToSimple
     | Tick Time.Posix
     | RemoveStatus Int
+    | SimpleField (SearchBox.ChangeEvent String)
+    | AdvancedField AdvancedMsg
 
 
 view : Model -> Browser.Document Msg
@@ -238,11 +242,11 @@ viewContent model =
     let
         field =
             case model.searchField of
-                Simple autocomplete ->
-                    viewSearchField autocomplete
+                Simple ->
+                    viewSearchField model.simpleField
 
-                Advanced fields ->
-                    viewAdvancedSearchFields fields
+                Advanced ->
+                    viewAdvancedSearchFields model.advancedField
     in
     Element.column [ centerX, spacing 10 ]
         [ qebrLogo
@@ -256,7 +260,7 @@ viewAdvancedSearchFields fields =
     let
         simpleInput text toFilterMsg label =
             Input.text [ padding 5, Border.width 2, Element.width <| Element.px 300 ]
-                { onChange = ChangedSearchField << AdvancedField << toFilterMsg
+                { onChange = AdvancedField << toFilterMsg
                 , placeholder = Nothing
                 , label = Input.labelLeft [ Element.width fill, paddingXY 5 0 ] <| Element.text label
                 , text = text
@@ -264,7 +268,7 @@ viewAdvancedSearchFields fields =
 
         datePicker =
             DatePicker.input [ padding 5, Element.width <| Element.px 300 ]
-                { onChange = ChangedSearchField << AdvancedField << Dod
+                { onChange = AdvancedField << Dod
                 , selected = fields.dod.date
                 , text = fields.dod.dateText
                 , label = Input.labelLeft [ Element.width fill ] <| Element.text "Death Date"
@@ -280,7 +284,7 @@ viewAdvancedSearchFields fields =
         , simpleInput fields.afochaName AfochaName "Afocha"
         , Input.radio [ Element.width fill ]
             { label = Input.labelLeft [ Element.width fill ] <| Element.text "Gender"
-            , onChange = ChangedSearchField << AdvancedField << Gender
+            , onChange = AdvancedField << Gender
             , options =
                 [ Input.option Male (Element.text "Male")
                 , Input.option Female (Element.text "Female")
@@ -305,6 +309,9 @@ viewResults page =
     case page of
         Start ->
             Element.none
+
+        Loading ->
+            Element.el [] <| Element.text "Loading..."
 
         SearchResult results ->
             viewListDeceased results
@@ -366,7 +373,7 @@ viewSearchField autocomplete =
 searchInputField : Autocomplete -> Element.Element Msg
 searchInputField autocomplete =
     SearchBox.input [ padding 5, Border.width 2, Element.width <| Element.px 400 ]
-        { onChange = ChangedSearchField << SimpleField
+        { onChange = SimpleField
         , text = autocomplete.searchQuery
         , selected = autocomplete.selected
         , options = autocomplete.suggestions
@@ -429,8 +436,8 @@ genderToAvatar gender =
         Female ->
             femaleAvatar
 
-        _ ->
-            maleAvatar
+        Unknown ->
+            neutralAvatar
 
 
 modSelection : Autocomplete -> String -> Autocomplete
@@ -462,76 +469,87 @@ initDeathDate =
     DeathDate Nothing "" (DatePicker.init |> DatePicker.close)
 
 
-init : () -> ( Model, Cmd msg )
+initFilterFields : FilterFields
+initFilterFields =
+    FilterFields "" "" initDeathDate "" Unknown ""
+
+
+initAutocomplete : Autocomplete
+initAutocomplete =
+    Autocomplete Nothing Nothing SearchBox.init ""
+
+
+init : () -> ( Model, Cmd Msg )
 init _ =
-    -- ( Model Start <| Advanced (FilterFields "" "" initDeathDate "" Unknown ""), Cmd.none )
-    ( Model [] Start <| Simple (Autocomplete Nothing Nothing SearchBox.init ""), Cmd.none )
+    ( { page = Start
+      , status = []
+      , searchField = Simple
+      , simpleField = initAutocomplete
+      , advancedField = initFilterFields
+      }
+    , Cmd.none
+    )
 
 
-updateSearchBox : Model -> SearchBox.ChangeEvent String -> Autocomplete -> ( Model, Cmd Msg )
-updateSearchBox model ev ac =
+updateSearchBox : Model -> SearchBox.ChangeEvent String -> ( Model, Cmd Msg )
+updateSearchBox model ev =
     case ev of
         SearchBox.SelectionChanged selected ->
-            ( { model | searchField = Simple (modSelection ac selected) }, Cmd.none )
+            ( { model | searchField = Simple, simpleField = modSelection model.simpleField selected }, Cmd.none )
 
         SearchBox.TextChanged text ->
-            ( { model | searchField = Simple (modQuery ac text) }, fetchAutocomplete text )
+            ( { model | searchField = Simple, simpleField = modQuery model.simpleField text }, fetchAutocomplete text )
 
         SearchBox.SearchBoxChanged subMsg ->
-            ( { model | searchField = Simple (modBoxState ac subMsg) }, Cmd.none )
+            ( { model | searchField = Simple, simpleField = modBoxState model.simpleField subMsg }, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         SwitchToAdvanced ->
-            ( { model | searchField = Advanced (FilterFields "" "" initDeathDate "" Unknown "") }
-            , Task.perform (ChangedSearchField << AdvancedField << SetToday) Date.today
+            ( { model | searchField = Advanced }
+            , Task.perform (AdvancedField << SetToday) Date.today
             )
 
         SwitchToSimple ->
-            ( { model | searchField = Simple (Autocomplete Nothing Nothing SearchBox.init "") }, Cmd.none )
+            ( { model | searchField = Simple }, Cmd.none )
 
-        ChangedSearchField ev ->
-            case ( model.searchField, ev ) of
-                ( Simple ac, SimpleField smAdv ) ->
-                    updateSearchBox model smAdv ac
+        AdvancedField advMsg ->
+            ( { model | advancedField = updateAdvancedMsg advMsg model.advancedField }, Cmd.none )
 
-                ( Advanced fields, AdvancedField advEv ) ->
-                    ( { model | searchField = Advanced (updateAdvancedMsg advEv fields) }, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
+        SimpleField smpMsg ->
+            updateSearchBox model smpMsg
 
         Search ->
             let
                 query =
                     case model.searchField of
-                        Simple ac ->
-                            case ac.selected of
+                        Simple ->
+                            case model.simpleField.selected of
                                 Nothing ->
-                                    ac.searchQuery
+                                    model.simpleField.searchQuery
 
                                 Just text ->
                                     text
 
-                        Advanced filters ->
+                        Advanced ->
                             -- ['full_name', 'kebele', 'dod', 'grave_number', 'gender', 'afocha_name__name']
-                            filters.fullName
+                            model.advancedField.fullName
                                 ++ ","
-                                ++ filters.qebele
+                                ++ model.advancedField.qebele
                                 ++ ","
-                                ++ filters.dod.dateText
+                                ++ model.advancedField.dod.dateText
                                 ++ ","
-                                ++ filters.graveNumber
+                                ++ model.advancedField.graveNumber
                                 ++ ","
-                                ++ genderToString filters.gender
+                                ++ genderToString model.advancedField.gender
                                 ++ ","
-                                ++ filters.afochaName
+                                ++ model.advancedField.afochaName
 
                 queryServer =
                     if String.length query >= 3 then
-                        ( model, searchQebr query )
+                        ( { model | page = Loading }, searchQebr query )
 
                     else
                         ( { model | status = statusWithTimer "Search length must be greater than 2" :: model.status }, Cmd.none )
@@ -548,16 +566,7 @@ update msg model =
             ( { model | status = showError err :: model.status }, Cmd.none )
 
         GotAutocomplete (Ok response) ->
-            let
-                m =
-                    case model.searchField of
-                        Simple ac ->
-                            { model | searchField = Simple (modSuggestions ac response) }
-
-                        _ ->
-                            model
-            in
-            ( m, Cmd.none )
+            ( { model | searchField = Simple, simpleField = modSuggestions model.simpleField response }, Cmd.none )
 
         GotAutocomplete (Err err) ->
             ( { model | page = serverError err }, Cmd.none )
