@@ -563,7 +563,7 @@ update msg model =
             ( { model | page = SearchResult response }, Cmd.none )
 
         GotQebrResponse (Err err) ->
-            ( { model | status = showError err :: model.status }, Cmd.none )
+            ( { model | status = showError err :: model.status, page = Error err }, Cmd.none )
 
         GotAutocomplete (Ok response) ->
             ( { model | searchField = Simple, simpleField = modSuggestions model.simpleField response }, Cmd.none )
